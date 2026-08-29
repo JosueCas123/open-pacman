@@ -110,34 +110,86 @@ function movePacman( game ) {
   wrapTunnel( p, width );
 }
 
-function decideGhost( game, g ) {
-  const grid = game.grid;
-  const p = game.pacman;
+function manhattan( ax, ay, bx, by ) {
+  return Math.abs( ax - bx ) + Math.abs( ay - by );
+}
 
-  const options = Object.keys( DIRS ).filter(
+// Orden de prioridad en empates, igual que el arcade original:
+// arriba > izquierda > abajo > derecha. Entre otras cosas permite a los
+// fantasmas salir de la pen por la puerta cuando hay distancias iguales.
+const GHOST_PRIORITY = [ 'up', 'left', 'down', 'right' ];
+
+// Elige la direccion que minimiza la distancia Manhattan hasta la celda objetivo.
+function pickToward( game, g, tx, ty ) {
+  const grid = game.grid;
+  const options = GHOST_PRIORITY.filter(
     ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir, 'ghost' )
   );
   // Sin salida (callejon): permitir el giro de 180.
   const choices = options.length ? options : [ '' + OPPOSITE[ g.dir ] ];
-
-  if ( g.kind === 'hunter' ) {
-    const px = Math.round( p.x );
-    const py = Math.round( p.y );
-    let best = choices[ 0 ];
-    let bestDist = Infinity;
-    for ( const dir of choices ) {
-      const d = DIRS[ dir ];
-      const nx = g.x + d.x;
-      const ny = g.y + d.y;
-      const dist = Math.abs( nx - px ) + Math.abs( ny - py );
-      if ( dist < bestDist ) {
-        bestDist = dist;
-        best = dir;
-      }
+  let best = choices[ 0 ];
+  let bestDist = Infinity;
+  for ( const dir of choices ) {
+    const d = DIRS[ dir ];
+    const dist = manhattan( g.x + d.x, g.y + d.y, tx, ty );
+    if ( dist < bestDist ) {
+      bestDist = dist;
+      best = dir;
     }
-    g.dir = best;
-  } else {
-    g.dir = choices[ Math.floor( Math.random() * choices.length ) ];
+  }
+  return best;
+}
+
+// La pen agrupa el interior (rows 13-15, cols 11-16) y la puerta (row 12,
+// cols 13-14). Mientras un fantasma esta ahi, su unica salida es la puerta.
+function inPen( x, y ) {
+  if ( y === 12 ) return x >= 13 && x <= 14;
+  return x >= 11 && x <= 16 && y >= 13 && y <= 15;
+}
+
+function decideGhost( game, g ) {
+  const p = game.pacman;
+  const px = Math.round( p.x );
+  const py = Math.round( p.y );
+
+  // Dentro de la pen: salir por la puerta (13,12) antes de aplicar su conducta.
+  if ( inPen( g.x, g.y ) ) {
+    g.dir = pickToward( game, g, 13, 12 );
+    return;
+  }
+
+  switch ( g.kind ) {
+    case 'pinky': {
+      // Emboscador: apunta a 4 casillas delante de Pac-Man segun su direccion.
+      const d = DIRS[ p.dir ];
+      g.dir = pickToward( game, g, px + d.x * 4, py + d.y * 4 );
+      break;
+    }
+    case 'inky': {
+      // Flanqueador: duplica el vector desde blinky hasta 2 casillas delante
+      // de Pac-Man. Requiere la posicion de blinky cada frame.
+      const blinky = game.ghosts.find( ( h ) => h.kind === 'blinky' );
+      const d = DIRS[ p.dir ];
+      const ax = px + d.x * 2;
+      const ay = py + d.y * 2;
+      g.dir = pickToward( game, g, ax + ( ax - blinky.x ), ay + ( ay - blinky.y ) );
+      break;
+    }
+    case 'clyde': {
+      // Tímido: si esta a <=8 casillas de Pac-Man huye a la esquina
+      // inferior-izquierda; si esta mas lejos, persigue.
+      const dist = manhattan( Math.round( g.x ), Math.round( g.y ), px, py );
+      if ( dist > 8 ) {
+        g.dir = pickToward( game, g, px, py );
+      } else {
+        g.dir = pickToward( game, g, 0, game.grid.length - 1 );
+      }
+      break;
+    }
+    default: {
+      // blinky: perseguidor agresivo (distancia Manhattan a Pac-Man).
+      g.dir = pickToward( game, g, px, py );
+    }
   }
 }
 
